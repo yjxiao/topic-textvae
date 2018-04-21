@@ -74,7 +74,10 @@ class TextVAE(nn.Module):
         self.lookup = nn.Embedding(vocab_size, embed_size)
         self.encoder = Encoder(embed_size, hidden_size, code_size, dropout)
         self.decoder = Decoder(embed_size + hidden_size, hidden_size, code_size, dropout)
+        # output layer
         self.fcout = nn.Linear(hidden_size, vocab_size)
+        # transform bag-of-words distribution to a lower dimension
+        self.fcbow = nn.Linear(vocab_size, hidden_size)
         self.bow_prior = BoWPrior(vocab_size, hidden_size, code_size)
 
     def reparameterize(self, mu, logvar):
@@ -87,6 +90,7 @@ class TextVAE(nn.Module):
         dec_emb = self.lookup(self.dropword(inputs))
         mu, logvar = self.encoder(enc_emb, lengths)
         z = self.reparameterize(mu, logvar)
+        bow_code = F.tanh(self.fcbow(bow))
         outputs, _ = self.decoder(dec_emb, z, bow, lengths=lengths)
         outputs = self.fcout(outputs)
         alphas = self.bow_prior(z)
