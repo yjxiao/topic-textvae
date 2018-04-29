@@ -1,9 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.autograd import Variable
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
-
+from torch.distributions.dirichlet import Dirichlet
 from data import UNK_ID
 
 
@@ -17,9 +16,9 @@ class DropWord(nn.Module):
         if not self.training or self.dropout == 0:
             return inputs
         else:
-            dropmask = Variable(torch.bernoulli(
-                inputs.data.new(inputs.size()).float().fill_(self.dropout)).byte(),
-                                requires_grad=False)
+            dropmask = torch.bernoulli(
+                inputs.data.new(inputs.size()).float().fill_(self.dropout)
+            ).byte()
             
             inputs = inputs.clone()
             inputs[dropmask] = self.unk_id
@@ -46,21 +45,24 @@ class Decoder(nn.Module):
         super(Decoder, self).__init__()
         self.drop = nn.Dropout(dropout)
         self.rnn = nn.LSTM(input_size, hidden_size, num_layers=1, batch_first=True)
-        self.fcz = nn.Linear(code_size, hidden_size)
+        self.fcz = nn.Linear(code_size, hidden_size * 2)
         
-    def forward(self, inputs, z, bow, lengths=None, init_hidden=None):
+    def forward(self, inputs, z, bow_code, lengths=None, init_hidden=None):
         # inputs size: batch_size x sequence_length x embed_size
         # bow size: batch_size x hidden_size
-        inputs = torch.cat(inputs, bow.unsqueeze(1).expand(-1, inputs.size(1), -1), dim=2)
+        
+        # Options: bow can be fused with z to initialize the decoder state
+        #          or feed into each step of input e.g.
+        
+        #   inputs = torch.cat([inputs, bow.unsqueeze(1).expand(-1, inputs.size(1), -1)], dim=2)
         inputs = self.drop(inputs)
         if lengths is not None:
             inputs = pack_padded_sequence(inputs, lengths, batch_first=True)
         if init_hidden is None:
-            init_hidden = F.tanh(self.fcz(z))
-            init_c = Variable(init_hidden.data.new(init_hidden.size()).zero_())
-            outputs, hidden = self.rnn(inputs, (init_hidden, init_c))
-        else:
-            outputs, hidden = self.rnn(inputs, init_hidden)
+            latent_code = self.fcz(z)
+            init_hidden = [x.contiguous() for x in torch.chunk(F.tanh(latent_code + bow_code), 2, 2)]
+            #init_hidden = [x.contiguous() for x in torch.chunk(F.tanh(self.fcz(z)), 2, 2)]
+        outputs, hidden = self.rnn(inputs, init_hidden)
         if lengths is not None:
             outputs, _ = pad_packed_sequence(outputs, batch_first=True)
         outputs = self.drop(outputs)
@@ -73,48 +75,68 @@ class TextVAE(nn.Module):
         self.dropword = DropWord(dropword, UNK_ID)
         self.lookup = nn.Embedding(vocab_size, embed_size)
         self.encoder = Encoder(embed_size, hidden_size, code_size, dropout)
-        self.decoder = Decoder(embed_size + hidden_size, hidden_size, code_size, dropout)
+        self.decoder = Decoder(embed_size, hidden_size, code_size, dropout)
         # output layer
         self.fcout = nn.Linear(hidden_size, vocab_size)
         # transform bag-of-words distribution to a lower dimension
-        self.fcbow = nn.Linear(vocab_size, hidden_size)
+        self.fcbow = nn.Linear(vocab_size, hidden_size * 2)
         self.bow_prior = BoWPrior(vocab_size, hidden_size, code_size)
 
     def reparameterize(self, mu, logvar):
         std = logvar.mul(0.5).exp_()
-        eps = Variable(std.data.new(std.size()).normal_())
+        eps = std.data.new(std.size()).normal_()
         return eps.mul(std).add_(mu)
 
     def forward(self, inputs, bow, lengths):
         enc_emb = self.lookup(inputs)
         dec_emb = self.lookup(self.dropword(inputs))
         mu, logvar = self.encoder(enc_emb, lengths)
-        z = self.reparameterize(mu, logvar)
-        bow_code = F.tanh(self.fcbow(bow))
-        outputs, _ = self.decoder(dec_emb, z, bow, lengths=lengths)
-        outputs = self.fcout(outputs)
+        if self.training:
+            z = self.reparameterize(mu, logvar)
+        else:
+            z = mu
         alphas = self.bow_prior(z)
+        bow_code = self.fcbow(bow)
+        #if not self.training:
+        #    dist = Dirichlet(alphas.cpu())
+        #    bow_samples = dist.sample().cuda()
+        #    bow_code = self.fcbow(bow_samples)
+        outputs, _ = self.decoder(dec_emb, z, bow_code, lengths=lengths)
+        outputs = self.fcout(outputs)
         return outputs, mu, logvar, alphas
 
-    def sample(self, inputs, lengths, max_length, sos_id, eos_id):
-        # TODO: modify
+    def reconstruct(self, inputs, bow, lengths, max_length, num_samples, sos_id, eos_id):
         enc_emb = self.lookup(inputs)
         mu, logvar = self.encoder(enc_emb, lengths)
-        # z size: 1 x batch_size x code_size
+        mu = mu.repeat(1, num_samples, 1)
+        logvar = logvar.repeat(1, num_samples, 1)
+        # z size: 1 x (num_samples*batch_size) x code_size
         z = self.reparameterize(mu, logvar)
+        if bow is None:
+            alphas = self.bow_prior(z)
+            if alphas.device.type == 'cuda':
+                dist = Dirichlet(alphas.cpu())
+                bow = dist.sample().cuda()
+            else:
+                dist = Dirichlet(alphas)
+                bow = dist.sample()
+        else:
+            bow = bow.repeat(num_samples, 1)
+        bow_code = self.fcbow(bow)
         batch_size = z.size(1)
-        dec_inputs = Variable(z.data.new(batch_size, 1).long().fill_(sos_id), volatile=True)
-        init_hidden = None
-        generated = dec_inputs.data.new(batch_size, max_length)
+        generated = inputs.data.new(batch_size, max_length)
+        dec_inputs = inputs.data.new(batch_size, 1).fill_(sos_id)
+        hidden = None
         for k in range(max_length):
             dec_emb = self.lookup(dec_inputs)
-            outputs, hidden = self.decoder(dec_emb, z, init_hidden=init_hidden)
+            outputs, hidden = self.decoder(dec_emb, z, bow_code, init_hidden=hidden)
             outputs = self.fcout(outputs)
             dec_inputs = outputs.max(2)[1]
             generated[:, k] = dec_inputs.data[:, 0].clone()
-            init_hidden = hidden
         return generated
 
+    def sample(self, z, max_length, num_samples, sos_id, eos_id):
+        pass
 
 class BoWPrior(nn.Module):
     def __init__(self, vocab_size, hidden_size, code_size, eps=1e-4):

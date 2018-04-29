@@ -2,3 +2,5 @@
 *.pyc
 data/*
 saves/*
+logs/*
+__pycache__/*
