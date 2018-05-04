@@ -13,6 +13,12 @@ from data import PAD_ID
 parser = argparse.ArgumentParser(description='Text VAE')
 parser.add_argument('--data', type=str, default='./data/fami',
                     help="location of the data folder")
+parser.add_argument('--bow_vocab', type=int, default=10000,
+                    help="vocabulary used in calculating bow KLD")
+parser.add_argument('--max_vocab', type=int, default=20000,
+                    help="maximum vocabulary size for the input")
+parser.add_argument('--max_length', type=int, default=200,
+                    help="maximum sequence length for the input")
 parser.add_argument('--embed_size', type=int, default=200,
                     help="size of the word embedding")
 parser.add_argument('--hidden_size', type=int, default=200,
@@ -34,6 +40,8 @@ parser.add_argument('--wd', type=float, default=0,
 parser.add_argument('--kla', action='store_true',
                     help='do kl annealing')
 parser.add_argument('--seed', type=int, default=42,
+                    help="random seed")
+parser.add_argument('--log_every', type=int, default=1000,
                     help="random seed")
 parser.add_argument('--nocuda', action='store_true',
                     help="do not use CUDA")
@@ -127,6 +135,7 @@ def train(data_source, model, optimizer, epoch):
         loss = ce + kld_weight * kld + kld_bow
         loss.backward()
         optimizer.step()
+            
     ppl = math.exp(total_ce / total_words)
     return (total_ce / data_source.size, total_kld / data_source.size,
             total_bow / data_source.size, ppl, kld_weight)
@@ -142,14 +151,15 @@ def weight_schedule(data_size, batch_size, epoch, i):
 
 
 print("Loading data")
-corpus = data.Corpus(args.data)
+corpus = data.Corpus(args.data, bow_vocab_size=args.bow_vocab,
+                     max_vocab_size=args.max_vocab, max_length=args.max_length)
 vocab_size = len(corpus.word2idx)
 print("\ttraining data size: ", corpus.train_data.size)
 print("\tvocabulary size: ", vocab_size)
 print("Constructing model")
 print(args)
 device = torch.device('cpu' if args.nocuda else 'cuda')
-model = TextVAE(vocab_size, args.embed_size, args.hidden_size, args.code_size,
+model = TextVAE(vocab_size, args.bow_vocab, args.embed_size, args.hidden_size, args.code_size,
                 args.dropout, args.dropword).to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.wd)
 best_loss = None
@@ -167,10 +177,11 @@ try:
                   train_bow, train_ppl, valid_ce, valid_kld, valid_bow,
                   kld_weight, valid_ppl), flush=True)
         if best_loss is None or valid_ce + valid_kld < best_loss:
+            print('\tBest validation loss: {:4.4f} ({:4.4f})'.format(valid_ce, valid_kld))
             best_loss = valid_ce + valid_kld
             with open(args.save, 'wb') as f:
                 torch.save(model, f)
-                
+
 except KeyboardInterrupt:
     print('-' * 120)
     print('Exiting from training early')

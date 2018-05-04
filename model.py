@@ -70,7 +70,7 @@ class Decoder(nn.Module):
 
 
 class TextVAE(nn.Module):
-    def __init__(self, vocab_size, embed_size, hidden_size, code_size, dropout, dropword):
+    def __init__(self, vocab_size, bow_vocab_size, embed_size, hidden_size, code_size, dropout, dropword):
         super(TextVAE, self).__init__()
         self.dropword = DropWord(dropword, UNK_ID)
         self.lookup = nn.Embedding(vocab_size, embed_size)
@@ -79,8 +79,8 @@ class TextVAE(nn.Module):
         # output layer
         self.fcout = nn.Linear(hidden_size, vocab_size)
         # transform bag-of-words distribution to a lower dimension
-        self.fcbow = nn.Linear(vocab_size, hidden_size * 2)
-        self.bow_prior = BoWPrior(vocab_size, hidden_size, code_size)
+        self.fcbow = nn.Linear(bow_vocab_size, hidden_size * 2)
+        self.bow_prior = BoWPrior(bow_vocab_size, hidden_size, code_size)
 
     def reparameterize(self, mu, logvar):
         std = logvar.mul(0.5).exp_()
@@ -138,6 +138,7 @@ class TextVAE(nn.Module):
     def sample(self, z, max_length, num_samples, sos_id, eos_id):
         pass
 
+    
 class BoWPrior(nn.Module):
     def __init__(self, vocab_size, hidden_size, code_size, eps=1e-4):
         super(BoWPrior, self).__init__()
