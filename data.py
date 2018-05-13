@@ -68,7 +68,7 @@ class Data(object):
                     labels.append(label2idx[label])
         self.texts = np.array(texts)
         self.labels = np.array(labels, dtype=np.int32) if with_label else None
-        topic_datapath = datapath + '.{0:d}.nmf.tpcs'.format(num_topics)
+        topic_datapath = datapath + '.{0:d}.tpcs'.format(num_topics)
         with open(topic_datapath, 'rb') as f:
             self.topics = pickle.load(f).astype(np.float32)
         self.has_label = with_label

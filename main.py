@@ -198,8 +198,8 @@ def main(args):
             print("|                         | valid loss {:5.2f} ({:5.2f}, {:.2f}) "
                   "| valid ppl {:5.2f}".format(
                       valid_ce, valid_kld, valid_tpc, valid_ppl), flush=True)
-            if best_loss is None or valid_ce + valid_kld < best_loss:
-                best_loss = valid_ce + valid_kld
+            if best_loss is None or valid_ce + valid_kld + valid_tpc < best_loss:
+                best_loss = valid_ce + valid_kld + valid_tpc
                 with open(get_savepath(args), 'wb') as f:
                     torch.save(model, f)
 
