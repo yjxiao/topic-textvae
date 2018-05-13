@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from torch.distributions.dirichlet import Dirichlet
 from torch.distributions.kl import kl_divergence
 
-from model import TextVAE
+from model import TextVAE, TextCVAE
 import data
 from data import PAD_ID
 
@@ -21,6 +21,8 @@ parser.add_argument('--max_vocab', type=int, default=20000,
 parser.add_argument('--max_length', type=int, default=200,
                     help="maximum sequence length for the input")
 parser.add_argument('--embed_size', type=int, default=200,
+                    help="size of the word embedding")
+parser.add_argument('--label_embed_size', type=int, default=8,
                     help="size of the word embedding")
 parser.add_argument('--hidden_size', type=int, default=200,
                     help="number of hidden units for RNN")
@@ -74,7 +76,11 @@ def loss_function(targets, outputs, mu, logvar, alphas, topics):
                               targets.view(-1),
                               size_average=False,
                               ignore_index=PAD_ID)
-    kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+    if type(mu) == torch.Tensor:
+        kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+    else:
+        kld = -0.5 * torch.sum(1 + logvar[1] - logvar[0] - 
+                               ((mu[1] - mu[0]).pow(2) + logvar[1].exp()) / logvar[0].exp())
     prior = Dirichlet(alphas)
     alphas2 = topics * topics.size(1)
     posterior = Dirichlet(alphas2)

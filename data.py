@@ -22,6 +22,7 @@ class Corpus(object):
         filenames = ['train.txt', 'valid.txt', 'test.txt']            
         self.datapaths = [os.path.join(datadir, x) for x in filenames]
         self._construct_vocab()
+        self.num_classes = len(self.idx2label)
         self.train, self.valid, self.test = [
             Data(dp, (self.word2idx, self.label2idx), num_topics, max_length, with_label) \
             for dp in self.datapaths]
@@ -46,7 +47,7 @@ class Corpus(object):
         self.idx2label = sorted(labels)
         self.label2idx = dict((w, i) for (i, w) in enumerate(self.idx2label))
 
-
+        
 class Data(object):
     def __init__(self, datapath, vocabs, num_topics, max_length=None, with_label=False):
         word2idx, label2idx = vocabs

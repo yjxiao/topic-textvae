@@ -61,7 +61,7 @@ def reconstruct(data_source, model, idx2word):
 
 def sample(model, idx2word):
     results = []
-    samples = model.sample(args.max_length, args.num_samples, SOS_ID, device)
+    samples = model.sample(args.num_samples, args.max_length, SOS_ID, device)
     for sample in samples.cpu().numpy():
         results.append(indices_to_sentence(sample, idx2word))
     return results

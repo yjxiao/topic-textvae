@@ -102,7 +102,7 @@ class TextVAE(nn.Module):
         z = self.reparameterize(mu, logvar)
         return self.generate(z, topics, max_length, sos_id)
 
-    def sample(self, max_length, num_samples, sos_id, device):
+    def sample(self, num_samples, max_length, sos_id, device):
         """Randomly sample latent code to sample texts. 
         Note that num_samples should not be too large. 
 
@@ -129,8 +129,8 @@ class TextVAE(nn.Module):
 
     def generate(self, z, topics, max_length, sos_id):
         batch_size = z.size(1)
-        generated = torch.zeros((batch_size, max_length), dtype=torch.int)
-        dec_inputs = torch.full((batch_size, 1), sos_id, dtype=torch.int)
+        generated = torch.zeros((batch_size, max_length), dtype=torch.long)
+        dec_inputs = torch.full((batch_size, 1), sos_id, dtype=torch.long)
         hidden = None
         code = torch.cat((z, topics.unsqueeze(0)), dim=2)
         for k in range(max_length):
@@ -147,42 +147,91 @@ def _interpolate(pairs, i, n):
     return x1 * (n - 1 - i) / (n - 1) + x2 * i / (n - 1)
 
 
+class ZPrior(nn.Module):
+    def __init__(self, input_size, hidden_size, output_size):
+        super(ZPrior, self).__init__()
+        self.fc1 = nn.Linear(input_size, hidden_size)
+        self.fc2 = nn.Linear(hidden_size, output_size * 2)
+        self.act = nn.ReLU()
+
+    def forward(self, inputs):
+        # make sure input dimension is 1 x batch_size x input_size
+        return torch.chunk(self.fc2(self.act(self.fc1(inputs))), chunks=2, dim=2)
+
+        
 class TextCVAE(nn.Module):
     def __init__(self, vocab_size, num_topics, num_classes, embed_size,
                  label_embed_size, hidden_size, code_size, dropout):
         super(TextCVAE, self).__init__()
         self.lookup = nn.Embedding(vocab_size, embed_size)
         self.label_lookup = nn.Embedding(num_classes, label_embed_size)
-        # TODO: modify
         self.encoder = Encoder(embed_size, hidden_size, dropout)
-        self.decoder = Decoder(embed_size, hidden_size, code_size + num_topics, dropout)
-        self.fcmu = nn.Linear(hidden_size, code_size)
-        self.fclogvar = nn.Linear(hidden_size, code_size)
+        self.decoder = Decoder(embed_size, hidden_size,
+                               code_size + num_topics + label_embed_size, dropout)
+        self.fcmu = nn.Linear(hidden_size + label_embed_size, code_size)
+        self.fclogvar = nn.Linear(hidden_size + label_embed_size, code_size)
+        self.z_prior = ZPrior(label_embed_size, hidden_size, code_size)
         # output layer
         self.fcout = nn.Linear(hidden_size, vocab_size)
-        self.topic_prior = TopicPrior(num_topics, hidden_size, code_size)
+        self.topic_prior = TopicPrior(num_topics, hidden_size, code_size + label_embed_size)
 
     def reparameterize(self, mu, logvar):
         std = logvar.mul(0.5).exp_()
         eps = std.new(std.size()).normal_()
         return eps.mul(std).add_(mu)
 
-    def forward(self, inputs, topics, lengths, sample_topics=False):
+    def forward(self, inputs, labels, topics, lengths, sample_topics=False):
         enc_emb = self.lookup(inputs)
         dec_emb = self.lookup(inputs)
-        hn, _ = self.encoder(enc_emb, lengths)
-        mu, logvar = self.fcmu(hn), self.fclogvar(hn)
+        lab_emb = self.label_lookup(labels).unsqueeze(0)    # to match with shape of z
+        # prior of z
+        mu_pr, logvar_pr = self.z_prior(lab_emb)
+        h, _ = self.encoder(enc_emb, lengths)
+        hn = torch.cat([h, lab_emb], dim=2)
+        # posterior of z
+        mu_po, logvar_po = self.fcmu(hn), self.fclogvar(hn)
         if self.training:
-            z = self.reparameterize(mu, logvar)
+            z = self.reparameterize(mu_po, logvar_po)
         else:
-            z = mu
-        alphas = self.topic_prior(z)
+            z = mu_po
+        alphas = self.topic_prior(torch.cat([z, lab_emb], dim=2))
         topics = topics.unsqueeze(0)
         if sample_topics:
-            device = bow.device
-            dist = Dirichlet((topics * alphas.sum(2, keepdim=True)).cpu())
-            topics = dist.rsample().to(device)
-        code = torch.cat((z, topics), dim=2)
+            dist = Dirichlet((topics * topics.size(2)).cpu())
+            topics = dist.rsample().to(alphas.device)
+        code = torch.cat([z, topics, lab_emb], dim=2)
         outputs, _ = self.decoder(dec_emb, code, lengths=lengths)
         outputs = self.fcout(outputs)
-        return outputs, mu, logvar, alphas
+        return outputs, (mu_pr, mu_po), (logvar_pr, logvar_po), alphas
+
+    def reconstruct(self, inputs, labels, topics, lengths, max_length, sos_id):
+        enc_emb = self.lookup(inputs)
+        lab_emb = self.label_lookup(labels).unsqueeze(0)
+        h, _ = self.encoder(enc_emb, lengths)
+        hn = torch.cat([h, lab_emb], dim=2)
+        mu, logvar = self.fcmu(hn), self.fclogvar(hn)
+        z = self.reparameterize(mu, logvar)
+        return self.generate(z, topics, lab_emb, max_length, sos_id)
+
+    def sample(self, labels, max_length, sos_id):
+        lab_emb = self.label_lookup(labels).unsqueeze(0)
+        mu, logvar = self.z_prior(lab_emb)
+        z = self.reparameterize(mu, logvar)
+        alphas = self.topic_prior(torch.cat([z, lab_emb], dim=2))
+        dist = Dirichlet(alphas.cpu())
+        topics = dist.sample().to(alphas.device)
+        return self.generate(z, topics, lab_emb, max_length, sos_id)
+    
+    def generate(self, z, topics, lab_emb, max_length, sos_id):
+        batch_size = z.size(1)
+        generated = torch.zeros((batch_size, max_length), dtype=torch.long)
+        dec_inputs = torch.full((batch_size, 1), sos_id, dtype=torch.long)
+        hidden = None
+        code = torch.cat([z, topics.unsqueeze(0), lab_emb], dim=2)
+        for k in range(max_length):
+            dec_emb = self.lookup(dec_inputs)
+            outputs, hidden = self.decoder(dec_emb, code, init_hidden=hidden)
+            outputs = self.fcout(outputs)
+            dec_inputs = outputs.max(2)[1]
+            generated[:, k] = dec_inputs[:, 0].clone()
+        return generated
