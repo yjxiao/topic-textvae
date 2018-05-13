@@ -42,7 +42,7 @@ parser.add_argument('--kla', action='store_true',
                     help='do kl annealing')
 parser.add_argument('--seed', type=int, default=42,
                     help="random seed")
-parser.add_argument('--log_every', type=int, default=1000,
+parser.add_argument('--log_every', type=int, default=2000,
                     help="random seed")
 parser.add_argument('--nocuda', action='store_true',
                     help="do not use CUDA")
@@ -149,7 +149,7 @@ def interpolate(i, start, duration):
 
 def weight_schedule(t):
     """Scheduling of the KLD annealing weight. """
-    return interpolate(t, 7500, 25000)
+    return interpolate(t, 2000, 40000)
 
 
 def get_savepath(args):
@@ -198,8 +198,8 @@ def main(args):
             print("|                         | valid loss {:5.2f} ({:5.2f}, {:.2f}) "
                   "| valid ppl {:5.2f}".format(
                       valid_ce, valid_kld, valid_tpc, valid_ppl), flush=True)
-            if best_loss is None or valid_ce + valid_kld < best_loss:
-                best_loss = valid_ce + valid_kld
+            if best_loss is None or valid_ce + valid_kld + valid_tpc < best_loss:
+                best_loss = valid_ce + valid_kld + valid_tpc
                 with open(get_savepath(args), 'wb') as f:
                     torch.save(model, f)
 
