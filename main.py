@@ -42,6 +42,8 @@ parser.add_argument('--sample_topics', action='store_true',
                     help='sample bow from posterior during training')
 parser.add_argument('--kla', action='store_true',
                     help='do kl annealing')
+parser.add_argument('--bow', action='store_true',
+                    help='add bow loss')
 parser.add_argument('--seed', type=int, default=42,
                     help="random seed")
 parser.add_argument('--log_every', type=int, default=2000,
@@ -54,7 +56,7 @@ torch.manual_seed(args.seed)
 
 
     
-def loss_function(targets, outputs, mu, logvar, alphas, topics):
+def loss_function(targets, outputs, mu, logvar, alphas, topics, bow=None):
     """
 
     Inputs:
@@ -76,6 +78,14 @@ def loss_function(targets, outputs, mu, logvar, alphas, topics):
                               targets.view(-1),
                               size_average=False,
                               ignore_index=PAD_ID)
+    if bow is None:
+        bow_loss = torch.tensor(0., device=outputs.device)
+    else:
+        bow = bow.unsqueeze(1).repeat(1, outputs.size(1), 1).contiguous()
+        bow_loss = F.cross_entropy(bow.view(bow.size(0) * bow.size(1), bow.size(2)),
+                                   targets.view(-1),
+                                   size_average=False,
+                                   ignore_index=PAD_ID)
     if type(mu) == torch.Tensor:
         kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
     else:
@@ -85,7 +95,7 @@ def loss_function(targets, outputs, mu, logvar, alphas, topics):
     alphas2 = topics * topics.size(1)
     posterior = Dirichlet(alphas2)
     kld_tpc = kl_divergence(posterior, prior).sum()
-    return ce_loss, kld, kld_tpc
+    return ce_loss, kld, kld_tpc, bow_loss
 
 
 def evaluate(data_source, model, device):
@@ -102,10 +112,10 @@ def evaluate(data_source, model, device):
         topics = topics.to(device)
         labels = labels.to(device) if data_source.has_label else None
         if data_source.has_label:
-            outputs, mu, logvar, alphas = model(inputs, labels, topics, lengths)
+            outputs, mu, logvar, alphas, _ = model(inputs, labels, topics, lengths)
         else:
-            outputs, mu, logvar, alphas = model(inputs, topics, lengths)
-        ce, kld, kld_tpc = loss_function(targets, outputs, mu, logvar, alphas, topics)
+            outputs, mu, logvar, alphas, _ = model(inputs, topics, lengths)
+        ce, kld, kld_tpc, _ = loss_function(targets, outputs, mu, logvar, alphas, topics)
         total_ce += ce.item()
         total_kld += kld.item()
         total_kld_tpc += kld_tpc.item()
@@ -120,6 +130,7 @@ def train(data_source, model, optimizer, device, epoch):
     total_ce = 0.0
     total_kld = 0.0
     total_kld_tpc = 0.0
+    total_bow = 0.0
     total_words = 0
     for i in range(args.log_every):
         texts, labels, topics, lengths, _ = data_source.get_batch(args.batch_size)
@@ -128,25 +139,29 @@ def train(data_source, model, optimizer, device, epoch):
         topics = topics.to(device)
         labels = labels.to(device) if data_source.has_label else None
         if data_source.has_label:
-            outputs, mu, logvar, alphas = model(inputs, labels, topics, lengths)
+            outputs, mu, logvar, alphas, bow = model(inputs, labels, topics, lengths)
         else:
-            outputs, mu, logvar, alphas = model(inputs, topics, lengths)
-        ce, kld, kld_tpc = loss_function(targets, outputs, mu, logvar, alphas, topics)
+            outputs, mu, logvar, alphas, bow = model(inputs, topics, lengths)
+        if not args.bow:
+            bow = None
+        ce, kld, kld_tpc, bow_loss = loss_function(
+            targets, outputs, mu, logvar, alphas, topics, bow)
         total_ce += ce.item()
         total_kld += kld.item()
         total_kld_tpc += kld_tpc.item()
+        total_bow = bow_loss.item()
         total_words += sum(lengths)
         if args.kla:
             kld_weight = weight_schedule(args.log_every * (epoch - 1) + i)
         else:
             kld_weight = 1.
         optimizer.zero_grad()
-        loss = ce + kld_weight * kld + kld_tpc
+        loss = ce + kld_weight * kld + kld_tpc + bow_loss
         loss.backward()
         optimizer.step()
     ppl = math.exp(total_ce / total_words)
     return (total_ce / data_source.size, total_kld / data_source.size,
-            total_kld_tpc / data_source.size, ppl, kld_weight)
+            total_kld_tpc / data_source.size, ppl, total_bow / data_source.size)
 
 
 def interpolate(i, start, duration):
@@ -160,9 +175,10 @@ def weight_schedule(t):
 
 def get_savepath(args):
     dataset = args.data.rstrip('/').split('/')[-1]
-    path = './saves/z{0:d}.tpc{1:d}{2}{3}{4}.{5}.pt'.format(
+    path = './saves/z{0:d}.tpc{1:d}{2}{3}{4}{5}.{6}.pt'.format(
         args.code_size, args.num_topics, '.wd{:.0e}'.format(args.wd) if args.wd > 0 else '',
-        '.sampletpc' if args.sample_topics else '', '.kla' if args.kla else '', dataset)
+        '.sampletpc' if args.sample_topics else '', '.kla' if args.kla else '',
+        '.bow' if args.bow else '', dataset)
     return path
 
 
@@ -195,13 +211,14 @@ def main(args):
     try:
         for epoch in range(1, args.epochs+1):
             epoch_start_time = time.time()
-            train_ce, train_kld, train_tpc, train_ppl, kld_weight = train(corpus.train, model, optimizer, device, epoch)
+            train_ce, train_kld, train_tpc, train_ppl, train_bow = train(
+                corpus.train, model, optimizer, device, epoch)
             valid_ce, valid_kld, valid_tpc, valid_ppl = evaluate(corpus.valid, model, device)
             print('-' * 90)
             print("| epoch {:2d} | time {:5.2f}s | train loss {:5.2f} ({:5.2f}, {:.2f}) "
-                  "| train ppl {:5.2f}".format(
+                  "| train ppl {:5.2f} | bow loss {:5.2f}".format(
                       epoch, time.time()-epoch_start_time, train_ce, train_kld,
-                      train_tpc, train_ppl))
+                      train_tpc, train_ppl, train_bow))
             print("|                         | valid loss {:5.2f} ({:5.2f}, {:.2f}) "
                   "| valid ppl {:5.2f}".format(
                       valid_ce, valid_kld, valid_tpc, valid_ppl), flush=True)

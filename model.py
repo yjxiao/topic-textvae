@@ -8,7 +8,7 @@ from torch.distributions.relaxed_categorical import RelaxedOneHotCategorical
 
 class Encoder(nn.Module):
     def __init__(self, input_size, hidden_size, dropout):
-        super(Encoder, self).__init__()
+        super().__init__()
         self.drop = nn.Dropout(dropout)
         self.rnn = nn.LSTM(input_size, hidden_size, num_layers=1, batch_first=True)
 
@@ -21,7 +21,7 @@ class Encoder(nn.Module):
 
 class Decoder(nn.Module):
     def __init__(self, input_size, hidden_size, code_size, dropout):
-        super(Decoder, self).__init__()
+        super().__init__()
         self.drop = nn.Dropout(dropout)
         self.rnn = nn.LSTM(input_size, hidden_size, num_layers=1, batch_first=True)
         self.fccode = nn.Linear(code_size, hidden_size * 2)
@@ -40,12 +40,20 @@ class Decoder(nn.Module):
         return outputs, hidden
 
 
-class TopicPrior(nn.Module):
-    def __init__(self, num_topics, hidden_size, code_size):
-        super(TopicPrior, self).__init__()
-        self.fc1 = nn.Linear(code_size, hidden_size)
-        self.activation = nn.ReLU()
-        self.fc2 = nn.Linear(hidden_size, num_topics)
+class MLP(nn.Module):
+    def __init__(self, input_size, hidden_size, output_size):
+        super().__init__()
+        self.fc1 = nn.Linear(input_size, hidden_size)
+        self.act = nn.ReLU()
+        self.fc2 = nn.Linear(hidden_size, output_size)
+
+    def forward(self, inputs):
+        return self.fc2(self.act(self.fc1(inputs)))
+
+    
+class TopicPrior(MLP):
+    def __init__(self, code_size, hidden_size, num_topics):
+        super().__init__(code_size, hidden_size, num_topics)
 
     def forward(self, inputs):
         """
@@ -54,13 +62,21 @@ class TopicPrior(nn.Module):
 
         """
         # alphas are positive reals
-        alphas = self.fc2(self.activation(self.fc1(inputs))).exp()
+        alphas = super().forward(inputs).exp()
         return alphas
 
 
+class BowPredictor(MLP):
+    def __init__(self, code_size, hidden_size, vocab_size):
+        super().__init__(code_size, hidden_size, vocab_size)
+
+    def forward(self, inputs):
+        return super().forward(inputs)
+
+        
 class TextVAE(nn.Module):
     def __init__(self, vocab_size, num_topics, embed_size, hidden_size, code_size, dropout):
-        super(TextVAE, self).__init__()
+        super().__init__()
         self.lookup = nn.Embedding(vocab_size, embed_size)
         self.encoder = Encoder(embed_size, hidden_size, dropout)
         self.decoder = Decoder(embed_size, hidden_size, code_size + num_topics, dropout)
@@ -68,7 +84,8 @@ class TextVAE(nn.Module):
         self.fclogvar = nn.Linear(hidden_size, code_size)
         # output layer
         self.fcout = nn.Linear(hidden_size, vocab_size)
-        self.topic_prior = TopicPrior(num_topics, hidden_size, code_size)
+        self.topic_prior = TopicPrior(code_size, hidden_size, num_topics)
+        self.bow_predictor = BowPredictor(code_size, hidden_size, vocab_size)
 
     def reparameterize(self, mu, logvar):
         std = logvar.mul(0.5).exp_()
@@ -93,7 +110,8 @@ class TextVAE(nn.Module):
         code = torch.cat((z, topics), dim=2)
         outputs, _ = self.decoder(dec_emb, code, lengths=lengths)
         outputs = self.fcout(outputs)
-        return outputs, mu, logvar, alphas
+        bow = self.bow_predictor(z).squeeze(0)
+        return outputs, mu, logvar, alphas, bow
 
     def reconstruct(self, inputs, topics, lengths, max_length, sos_id):
         enc_emb = self.lookup(inputs)
@@ -147,18 +165,15 @@ def _interpolate(pairs, i, n):
     return x1 * (n - 1 - i) / (n - 1) + x2 * i / (n - 1)
 
 
-class ZPrior(nn.Module):
+class ZPrior(MLP):
     def __init__(self, input_size, hidden_size, output_size):
-        super(ZPrior, self).__init__()
-        self.fc1 = nn.Linear(input_size, hidden_size)
-        self.fc2 = nn.Linear(hidden_size, output_size * 2)
-        self.act = nn.ReLU()
+        super().__init__(input_size, hidden_size, output_size * 2)
 
     def forward(self, inputs):
         # make sure input dimension is 1 x batch_size x input_size
-        return torch.chunk(self.fc2(self.act(self.fc1(inputs))), chunks=2, dim=2)
+        return torch.chunk(super().forward(inputs), chunks=2, dim=2)
 
-        
+
 class TextCVAE(nn.Module):
     def __init__(self, vocab_size, num_topics, num_classes, embed_size,
                  label_embed_size, hidden_size, code_size, dropout):
@@ -173,7 +188,8 @@ class TextCVAE(nn.Module):
         self.z_prior = ZPrior(label_embed_size, hidden_size, code_size)
         # output layer
         self.fcout = nn.Linear(hidden_size, vocab_size)
-        self.topic_prior = TopicPrior(num_topics, hidden_size, code_size + label_embed_size)
+        self.topic_prior = TopicPrior(code_size + label_embed_size, hidden_size, num_topics)
+        self.bow_predictor = BowPredictor(code_size + label_embed_size, hidden_size, vocab_size)
 
     def reparameterize(self, mu, logvar):
         std = logvar.mul(0.5).exp_()
@@ -202,6 +218,7 @@ class TextCVAE(nn.Module):
         code = torch.cat([z, topics, lab_emb], dim=2)
         outputs, _ = self.decoder(dec_emb, code, lengths=lengths)
         outputs = self.fcout(outputs)
+        bow = self.bow_predictor(torch.cat([z, lab_emb], dim=2).squeeze(0))
         return outputs, (mu_pr, mu_po), (logvar_pr, logvar_po), alphas
 
     def reconstruct(self, inputs, labels, topics, lengths, max_length, sos_id):
