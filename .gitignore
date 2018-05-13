@@ -1,4 +1,5 @@
 *~
+*.txt
 *.pyc
 *.log
 data/*

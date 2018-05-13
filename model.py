@@ -100,7 +100,7 @@ class TextVAE(nn.Module):
         hn, _ = self.encoder(enc_emb, lengths)
         mu, logvar = self.fcmu(hn), self.fclogvar(hn)
         z = self.reparameterize(mu, logvar)
-        return self.generate(z, topics, max_length, sos_id)
+        return self.generate(z, topics.unsqueeze(0), max_length, sos_id)
 
     def sample(self, num_samples, max_length, sos_id, device):
         """Randomly sample latent code to sample texts. 
@@ -124,15 +124,15 @@ class TextVAE(nn.Module):
         for i in range(num_pts+2):
             z = _interpolate(z_pairs, i, num_pts+2)
             topics = _interpolate(topic_pairs, i, num_pts+2)
-            generated.append(self.generate(z, topics, max_length, sos_id))
+            generated.append(self.generate(z, topics.unsqueeze(0), max_length, sos_id))
         return generated
 
     def generate(self, z, topics, max_length, sos_id):
         batch_size = z.size(1)
-        generated = torch.zeros((batch_size, max_length), dtype=torch.long)
-        dec_inputs = torch.full((batch_size, 1), sos_id, dtype=torch.long)
+        generated = torch.zeros((batch_size, max_length), dtype=torch.long, device=z.device)
+        dec_inputs = torch.full((batch_size, 1), sos_id, dtype=torch.long, device=z.device)
         hidden = None
-        code = torch.cat((z, topics.unsqueeze(0)), dim=2)
+        code = torch.cat((z, topics), dim=2)
         for k in range(max_length):
             dec_emb = self.lookup(dec_inputs)
             outputs, hidden = self.decoder(dec_emb, code, init_hidden=hidden)
@@ -224,8 +224,8 @@ class TextCVAE(nn.Module):
     
     def generate(self, z, topics, lab_emb, max_length, sos_id):
         batch_size = z.size(1)
-        generated = torch.zeros((batch_size, max_length), dtype=torch.long)
-        dec_inputs = torch.full((batch_size, 1), sos_id, dtype=torch.long)
+        generated = torch.zeros((batch_size, max_length), dtype=torch.long, device=z.device)
+        dec_inputs = torch.full((batch_size, 1), sos_id, dtype=torch.long, device=z.device)
         hidden = None
         code = torch.cat([z, topics.unsqueeze(0), lab_emb], dim=2)
         for k in range(max_length):

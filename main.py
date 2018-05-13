@@ -159,15 +159,15 @@ def weight_schedule(t):
 
 
 def get_savepath(args):
-    dataset = args.data.split('/')[-1]
-    path = './saves/z{0:d}.tpc{1:d}{2}{3}.{4}.pt'.format(
-        args.code_size, args.num_topics, '.sampletpc' if args.sample_topics else '',
-        '.kla' if args.kla else '', dataset)
+    dataset = args.data.rstrip('/').split('/')[-1]
+    path = './saves/z{0:d}.tpc{1:d}{2}{3}{4}.{5}.pt'.format(
+        args.code_size, args.num_topics, '.wd{:.0e}'.format(args.wd) if args.wd > 0 else '',
+        '.sampletpc' if args.sample_topics else '', '.kla' if args.kla else '', dataset)
     return path
 
 
 def main(args):
-    dataset = args.data.split('/')[-1]
+    dataset = args.data.rstrip('/').split('/')[-1]
     print("Loading {} data".format(dataset))
     if dataset in ['yahoo', 'yelp']:
         with_label = True
