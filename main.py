@@ -154,8 +154,9 @@ def weight_schedule(t):
 
 def get_savepath(args):
     dataset = args.data.split('/')[-1]
-    path = './saves/z{0:d}.tpc{1:d}{2}.{3}.pt'.format(
-        args.code_size, args.num_topics, '.sampletpc' if args.sample_topics else '', dataset)
+    path = './saves/z{0:d}.tpc{1:d}{2}{3}.{4}.pt'.format(
+        args.code_size, args.num_topics, '.sampletpc' if args.sample_topics else '',
+        '.kla' if args.kla else '', dataset)
     return path
 
 
