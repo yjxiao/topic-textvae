@@ -25,6 +25,8 @@ parser.add_argument('--num_samples', type=int, default=1,
                     help='number of samples per reconstruction')
 parser.add_argument('--batch_size', type=int, default=32,
                     help='batch size used in generation')
+parser.add_argument('--bow', action='store_true',
+                    help='using model trained with bow loss')
 parser.add_argument('--cuda', action='store_true',
                     help='use cuda')
 parser.add_argument('--seed', type=int, default=42,
@@ -36,7 +38,9 @@ torch.manual_seed(args.seed)
 
 def get_checkpoint(args):
     dataset = args.data.rstrip('/').split('/')[-1]
-    return './saves/z32.tpc{0}.kla.{1}.pt'.format(args.num_topics, dataset)
+    return './saves/z32.tpc{0}.kla{1}.{2}.pt'.format(args.num_topics,
+                                                     '.bow' if args.bow else '',
+                                                     dataset)
 
 
 def indices_to_sentence(indices, idx2word):

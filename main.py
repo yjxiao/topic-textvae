@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from torch.distributions.dirichlet import Dirichlet
 from torch.distributions.kl import kl_divergence
 
-from model import TextVAE, TextCVAE
+from model import TextVAE, TextJointVAE, TextCVAE
 import data
 from data import PAD_ID
 
@@ -44,6 +44,8 @@ parser.add_argument('--kla', action='store_true',
                     help='do kl annealing')
 parser.add_argument('--bow', action='store_true',
                     help='add bow loss')
+parser.add_argument('--joint', action='store_true',
+                    help='model joint probability of p(x,t)')
 parser.add_argument('--seed', type=int, default=42,
                     help="random seed")
 parser.add_argument('--log_every', type=int, default=2000,
@@ -56,7 +58,8 @@ torch.manual_seed(args.seed)
 
 
     
-def loss_function(targets, outputs, mu, logvar, alphas, topics, bow=None):
+def loss_function(targets, outputs, mu, logvar, alphas, topics,
+                  bow=None, joint=False):
     """
 
     Inputs:
@@ -87,15 +90,18 @@ def loss_function(targets, outputs, mu, logvar, alphas, topics, bow=None):
                                    size_average=False,
                                    ignore_index=PAD_ID)
     if type(mu) == torch.Tensor:
-        kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+        kld = - 0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
     else:
-        kld = -0.5 * torch.sum(1 + logvar[1] - logvar[0] - 
-                               ((mu[1] - mu[0]).pow(2) + logvar[1].exp()) / logvar[0].exp())
+        kld = - 0.5 * torch.sum(1 + logvar[1] - logvar[0] - 
+                        ((mu[1] - mu[0]).pow(2) + logvar[1].exp()) / logvar[0].exp())
     prior = Dirichlet(alphas)
-    alphas2 = topics * topics.size(1)
-    posterior = Dirichlet(alphas2)
-    kld_tpc = kl_divergence(posterior, prior).sum()
-    return ce_loss, kld, kld_tpc, bow_loss
+    if joint:
+        loss_tpc = - torch.sum(prior.log_prob(topics))
+    else:
+        alphas2 = topics * topics.size(1)
+        posterior = Dirichlet(alphas2)
+        loss_tpc = kl_divergence(posterior, prior).sum()
+    return ce_loss, kld, loss_tpc, bow_loss
 
 
 def evaluate(data_source, model, device):
@@ -175,10 +181,10 @@ def weight_schedule(t):
 
 def get_savepath(args):
     dataset = args.data.rstrip('/').split('/')[-1]
-    path = './saves/z{0:d}.tpc{1:d}{2}{3}{4}{5}.{6}.pt'.format(
+    path = './saves/z{0:d}.tpc{1:d}{2}{3}{4}{5}{6}.{7}.pt'.format(
         args.code_size, args.num_topics, '.wd{:.0e}'.format(args.wd) if args.wd > 0 else '',
         '.sampletpc' if args.sample_topics else '', '.kla' if args.kla else '',
-        '.bow' if args.bow else '', dataset)
+        '.bow' if args.bow else '', '.jt' if args.joint else '', dataset)
     return path
 
 
@@ -202,8 +208,9 @@ def main(args):
                          args.embed_size, args.label_embed_size, args.hidden_size,
                          args.code_size, args.dropout).to(device)
     else:
-        model = TextVAE(vocab_size, args.num_topics, args.embed_size, args.hidden_size,
-                        args.code_size, args.dropout).to(device)
+        VAE = TextJointVAE if args.joint else TextVAE
+        model = VAE(vocab_size, args.num_topics, args.embed_size,
+                    args.hidden_size, args.code_size, args.dropout).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.wd)
     best_loss = None
 
@@ -215,11 +222,11 @@ def main(args):
                 corpus.train, model, optimizer, device, epoch)
             valid_ce, valid_kld, valid_tpc, valid_ppl = evaluate(corpus.valid, model, device)
             print('-' * 90)
-            print("| epoch {:2d} | time {:5.2f}s | train loss {:5.2f} ({:5.2f}, {:.2f}) "
+            print("| epoch {:2d} | time {:5.2f}s | train loss {:5.2f} ({:4.2f}, {:4.2f}) "
                   "| train ppl {:5.2f} | bow loss {:5.2f}".format(
                       epoch, time.time()-epoch_start_time, train_ce, train_kld,
                       train_tpc, train_ppl, train_bow))
-            print("|                         | valid loss {:5.2f} ({:5.2f}, {:.2f}) "
+            print("|                         | valid loss {:5.2f} ({:4.2f}, {:4.2f}) "
                   "| valid ppl {:5.2f}".format(
                       valid_ce, valid_kld, valid_tpc, valid_ppl), flush=True)
             if best_loss is None or valid_ce + valid_kld + valid_tpc < best_loss:
@@ -235,7 +242,7 @@ def main(args):
         model = torch.load(f)
     test_ce, test_kld, test_tpc, test_ppl = evaluate(corpus.test, model, device)
     print('=' * 90)
-    print("| End of training | test loss {:5.2f} ({:5.2f}, {:.2f}) | test ppl {:5.2f}".format(
+    print("| End of training | test loss {:5.2f} ({:4.2f}, {:4.2f}) | test ppl {:5.2f}".format(
         test_ce, test_kld, test_tpc, test_ppl))
     print('=' * 90)
 

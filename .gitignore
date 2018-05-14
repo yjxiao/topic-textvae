@@ -2,6 +2,7 @@
 *.txt
 *.pyc
 *.log
+*.sh
 data/*
 saves/*
 logs/*
