@@ -24,7 +24,7 @@ parser.add_argument('--embed_size', type=int, default=200,
                     help="size of the word embedding")
 parser.add_argument('--label_embed_size', type=int, default=8,
                     help="size of the word embedding")
-parser.add_argument('--hidden_size', type=int, default=200,
+parser.add_argument('--hidden_size', type=int, default=512,
                     help="number of hidden units for RNN")
 parser.add_argument('--code_size', type=int, default=32,
                     help="number of hidden units for RNN")
@@ -181,10 +181,11 @@ def weight_schedule(t):
 
 def get_savepath(args):
     dataset = args.data.rstrip('/').split('/')[-1]
-    path = './saves/z{0:d}.tpc{1:d}{2}{3}{4}{5}{6}.{7}.pt'.format(
+    path = './saves/emb{8:d}.hid{9:d}.z{0:d}.tpc{1:d}{2}{3}{4}{5}{6}.{7}.pt'.format(
         args.code_size, args.num_topics, '.wd{:.0e}'.format(args.wd) if args.wd > 0 else '',
         '.sampletpc' if args.sample_topics else '', '.kla' if args.kla else '',
-        '.bow' if args.bow else '', '.jt' if args.joint else '', dataset)
+        '.bow' if args.bow else '', '.jt' if args.joint else '', dataset,
+        args.embed_size, args.hidden_size)
     return path
 
 
