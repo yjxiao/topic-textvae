@@ -104,7 +104,7 @@ class TextVAE(nn.Module):
         alphas = self.topic_prior(z)
         topics = topics.unsqueeze(0)
         if sample_topics:
-            device = bow.device
+            device = topics.device
             dist = Dirichlet((topics * alphas.sum(2, keepdim=True)).cpu())
             topics = dist.rsample().to(device)
         code = torch.cat((z, topics), dim=2)
@@ -219,7 +219,7 @@ class TextCVAE(nn.Module):
         outputs, _ = self.decoder(dec_emb, code, lengths=lengths)
         outputs = self.fcout(outputs)
         bow = self.bow_predictor(torch.cat([z, lab_emb], dim=2).squeeze(0))
-        return outputs, (mu_pr, mu_po), (logvar_pr, logvar_po), alphas
+        return outputs, (mu_pr, mu_po), (logvar_pr, logvar_po), alphas, bow
 
     def reconstruct(self, inputs, labels, topics, lengths, max_length, sos_id):
         enc_emb = self.lookup(inputs)
