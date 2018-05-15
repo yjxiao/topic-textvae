@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from torch.distributions.dirichlet import Dirichlet
 from torch.distributions.kl import kl_divergence
 
-from model import TextVAE, TextJointVAE, TextCVAE
+from model import TextVAE, TextCVAE
 import data
 from data import PAD_ID
 
@@ -48,7 +48,7 @@ parser.add_argument('--joint', action='store_true',
                     help='model joint probability of p(x,t)')
 parser.add_argument('--seed', type=int, default=42,
                     help="random seed")
-parser.add_argument('--log_every', type=int, default=2000,
+parser.add_argument('--epoch_size', type=int, default=2000,
                     help="random seed")
 parser.add_argument('--nocuda', action='store_true',
                     help="do not use CUDA")
@@ -138,7 +138,7 @@ def train(data_source, model, optimizer, device, epoch):
     total_kld_tpc = 0.0
     total_bow = 0.0
     total_words = 0
-    for i in range(args.log_every):
+    for i in range(args.epoch_size):
         texts, labels, topics, lengths, _ = data_source.get_batch(args.batch_size)
         inputs = texts[:, :-1].clone().to(device)
         targets = texts[:, 1:].clone().to(device)
@@ -158,7 +158,7 @@ def train(data_source, model, optimizer, device, epoch):
         total_bow = bow_loss.item()
         total_words += sum(lengths)
         if args.kla:
-            kld_weight = weight_schedule(args.log_every * (epoch - 1) + i)
+            kld_weight = weight_schedule(args.epoch_size * (epoch - 1) + i)
         else:
             kld_weight = 1.
         optimizer.zero_grad()
@@ -207,11 +207,10 @@ def main(args):
     if with_label:
         model = TextCVAE(vocab_size, args.num_topics, corpus.num_classes,
                          args.embed_size, args.label_embed_size, args.hidden_size,
-                         args.code_size, args.dropout).to(device)
+                         args.code_size, args.dropout, args.joint).to(device)
     else:
-        VAE = TextJointVAE if args.joint else TextVAE
-        model = VAE(vocab_size, args.num_topics, args.embed_size,
-                    args.hidden_size, args.code_size, args.dropout).to(device)
+        model = TextVAE(vocab_size, args.num_topics, args.embed_size, args.hidden_size,
+                        args.code_size, args.dropout, args.joint).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.wd)
     best_loss = None
 
@@ -223,11 +222,11 @@ def main(args):
                 corpus.train, model, optimizer, device, epoch)
             valid_ce, valid_kld, valid_tpc, valid_ppl = evaluate(corpus.valid, model, device)
             print('-' * 90)
-            print("| epoch {:2d} | time {:5.2f}s | train loss {:5.2f} ({:4.2f}, {:4.2f}) "
+            meta = "| epoch {:2d} | time {:5.2f}s ".format(epoch, time.time()-epoch_start_time)
+            print(meta + "| train loss {:5.2f} ({:4.2f}, {:4.2f}) "
                   "| train ppl {:5.2f} | bow loss {:5.2f}".format(
-                      epoch, time.time()-epoch_start_time, train_ce, train_kld,
-                      train_tpc, train_ppl, train_bow))
-            print("|                         | valid loss {:5.2f} ({:4.2f}, {:4.2f}) "
+                      train_ce, train_kld, train_tpc, train_ppl, train_bow))
+            print(len(meta) * ' ' + "| valid loss {:5.2f} ({:4.2f}, {:4.2f}) "
                   "| valid ppl {:5.2f}".format(
                       valid_ce, valid_kld, valid_tpc, valid_ppl), flush=True)
             if best_loss is None or valid_ce + valid_kld + valid_tpc < best_loss:
