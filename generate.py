@@ -7,6 +7,8 @@ from data import SOS_ID, EOS_ID
 parser = argparse.ArgumentParser(description='Text VAE generate')
 parser.add_argument('--data', type=str, default='./data/books',
                     help='location of the corpus (same as training)')
+parser.add_argument('--ckpt', type=str, default='./saves/model.pt',
+                    help='location of the trained model')
 parser.add_argument('--num_topics', type=int, default=32,
                     help="number of topics for the model")
 parser.add_argument('--task', type=str, default='reconstruct',
@@ -36,13 +38,6 @@ args = parser.parse_args()
 torch.manual_seed(args.seed)
 
 
-def get_checkpoint(args):
-    dataset = args.data.rstrip('/').split('/')[-1]
-    return './saves/z32.tpc{0}.kla{1}.{2}.pt'.format(args.num_topics,
-                                                     '.bow' if args.bow else '',
-                                                     dataset)
-
-
 def indices_to_sentence(indices, idx2word):
     words = []
     for i in indices:
@@ -70,12 +65,11 @@ def reconstruct(data_source, model, idx2word, device):
     return results
 
 
-def sample(data_source, model, idx2word, device):
+def sample(data_source, model, label, idx2word, device):
     results = []
     if data_source.has_label:
-        labels = torch.randint(data_source.num_classes,
-                               (args.num_samples,),
-                               dtype=torch.long, device=device)
+        labels = torch.full((args.num_samples,), label,
+                            dtype=torch.long, device=device)
         samples = model.sample(labels, args.max_length, SOS_ID)
     else:
         samples = model.sample(args.num_samples, args.max_length, SOS_ID, device)
@@ -84,7 +78,7 @@ def sample(data_source, model, idx2word, device):
             label = labels[i].item()
             prefix = '{0:d}\t'.format(label)
         else:
-            predix = ''
+            prefix = ''
         results.append(prefix + indices_to_sentence(sample, idx2word))
     return results
 
@@ -136,8 +130,7 @@ def change_label(data_source, model, new_label, idx2word, device):
 
 
 def main(args):
-    ckpt = get_checkpoint(args)
-    with open(ckpt, 'rb') as f:
+    with open(args.ckpt, 'rb') as f:
         model = torch.load(f)
     model.eval()
     device = torch.device('cuda' if args.cuda else 'cpu')
@@ -156,26 +149,33 @@ def main(args):
     input_data = data.Data(input_path, (corpus.word2idx, corpus.label2idx),
                            args.num_topics, with_label=with_label)
     if args.task == 'reconstruct':
-        results = reconstruct(input_data, model, corpus.idx2word, device)
-        with open(output_path, 'w') as f:
-            f.write('\n'.join(results))
+        for i in range(args.num_samples):
+            results = reconstruct(input_data, model, corpus.idx2word, device)
+            with open('{0}.{1:d}.rec'.format(output_path, i), 'w') as f:
+                f.write('\n'.join(results))
     elif args.task == 'sample':
-        results = sample(input_data, model, corpus.idx2word, device)
-        with open(output_path, 'w') as f:
-            f.write('\n'.join(results))
+        if with_label:
+            for label in range(corpus.num_classes):
+                results = sample(input_data, model, label, corpus.idx2word, device)
+                with open('{0}.{1:d}.samp'.format(output_path, label), 'w') as f:
+                    f.write('\n'.join(results))
+        else:
+            results = sample(input_data, model, None, corpus.idx2word, device)
+            with open('{0}.samp'.format(output_path), 'w') as f:
+                f.write('\n'.join(results))
     elif args.task == 'interpolate':
         if with_label:
             raise ValueError("interpolate option not supported for labeled data")
         results = interpolate(input_data, model, corpus.idx2word, args.interpolate_type, device)
         for i, x in enumerate(results):
-            with open('{0}.{1:d}'.format(output_path, i), 'w') as f:
+            with open('{0}.{1:d}.{2}.int'.format(output_path, i, args.interpolate_type), 'w') as f:
                 f.write('\n'.join(x))
     elif args.task == 'change_label':
         if not with_label:
             raise ValueError("change_label not supported for unlabeled data")
         for k in range(corpus.num_classes):
             results = change_label(input_data, model, k, corpus.idx2word, device)
-            with open('{0}.{1:d}'.format(output_path, k), 'w') as f:
+            with open('{0}.{1:d}.cl'.format(output_path, k), 'w') as f:
                 f.write('\n'.join(results))
         
 

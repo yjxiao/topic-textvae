@@ -1,6 +1,7 @@
 *~
 *.txt
 *.pyc
+*.pt
 *.log
 *.sh
 data/*
