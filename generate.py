@@ -139,7 +139,7 @@ def main(args):
     with_label = True if dataset in ['yahoo', 'yelp'] else False
     print("Loading data")
     corpus = data.Corpus(args.data, args.num_topics, max_vocab_size=args.max_vocab,
-                         with_label=with_label)
+                         max_length=args.max_length, with_label=with_label)
     vocab_size = len(corpus.word2idx)
     print("\ttraining data size: ", corpus.train.size)
     print("\tvocabulary size: ", vocab_size)
@@ -147,7 +147,7 @@ def main(args):
     input_path = os.path.join(args.data, args.input_file)
     output_path = os.path.join(args.data, args.output_file)
     input_data = data.Data(input_path, (corpus.word2idx, corpus.label2idx),
-                           args.num_topics, with_label=with_label)
+                           args.num_topics, args.max_length, with_label=with_label)
     if args.task == 'reconstruct':
         for i in range(args.num_samples):
             results = reconstruct(input_data, model, corpus.idx2word, device)
