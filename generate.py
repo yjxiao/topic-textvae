@@ -67,19 +67,20 @@ def reconstruct(data_source, model, idx2word, device):
 
 def sample(data_source, model, label, idx2word, device):
     results = []
-    if data_source.has_label:
-        labels = torch.full((args.num_samples,), label,
-                            dtype=torch.long, device=device)
-        samples = model.sample(labels, args.max_length, SOS_ID)
-    else:
-        samples = model.sample(args.num_samples, args.max_length, SOS_ID, device)
-    for i, sample in enumerate(samples.cpu().numpy()):
+    for i in range(0, args.num_samples, args.batch_size):
+        batch_size = min(args.num_samples - i, args.batch_size)
         if data_source.has_label:
-            label = labels[i].item()
-            prefix = '{0:d}\t'.format(label)
+            labels = torch.full((batch_size,), label, dtype=torch.long, device=device)
+            samples = model.sample(labels, args.max_length, SOS_ID)
         else:
-            prefix = ''
-        results.append(prefix + indices_to_sentence(sample, idx2word))
+            samples = model.sample(batch_size, args.max_length, SOS_ID, device)
+        for i, sample in enumerate(samples.cpu().numpy()):
+            if data_source.has_label:
+                label = labels[i].item()
+                prefix = '{0:d}\t'.format(label)
+            else:
+                prefix = ''
+            results.append(prefix + indices_to_sentence(sample, idx2word))
     return results
 
 
