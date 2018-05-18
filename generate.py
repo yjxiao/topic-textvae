@@ -13,8 +13,6 @@ parser.add_argument('--num_topics', type=int, default=32,
                     help="number of topics for the model")
 parser.add_argument('--task', type=str, default='reconstruct',
                     help='task to perform: [reconstruct, interpolate, sample, change_label]')
-parser.add_argument('--interpolate_type', type=str, default='topics',
-                    help='how to interpolate [z, topics, both]')
 parser.add_argument('--max_vocab', type=int, default=20000,
                     help="maximum vocabulary size for the input")
 parser.add_argument('--input_file', type=str, default='valid.txt',
@@ -84,36 +82,39 @@ def sample(data_source, model, label, idx2word, device):
     return results
 
 
-def interpolate(data_source, model, idx2word, type, device):
-    samples = []
+def interpolate(data_source, model, idx2word, device):
+    samples_z = []
+    samples_t = []
+    samples_both = []
     for i in range(args.num_samples):
         texts1, _, topics1, lengths1, _ = data_source.get_batch(args.batch_size)
         texts2, _, topics2, lengths2, _ = data_source.get_batch(args.batch_size)
-        if type == 'z':
-            input_pairs = (texts1[:, :-1].clone().to(device),
-                           texts2[:, :-1].clone().to(device))
-            topic_pairs = (topics1.to(device), topics1.to(device))
-            length_pairs = (lengths1, lengths2)
-        elif type == 'topics':
-            input_pairs = (texts1[:, :-1].clone().to(device),
-                           texts1[:, :-1].clone().to(device))
-            topic_pairs = (topics1.to(device), topics2.to(device))
-            length_pairs = (lengths1, lengths1)
-        elif type == 'both':
-            input_pairs = (texts1[:, :-1].clone().to(device),
-                           texts2[:, :-1].clone().to(device))
-            topic_pairs = (topics1.to(device), topics2.to(device))
-            length_pairs = (lengths1, lengths2)
-        samples.append(model.interpolate(input_pairs, topic_pairs, length_pairs,
-                                         args.max_length, SOS_ID))
-    results = []
-    for x in zip(*samples):
-        sentences = []
-        # each x is a list of batch_size x max_length, i.e. batch of generated sentences
-        for sample in torch.cat(x).cpu().numpy():
-            sentences.append(indices_to_sentence(sample, idx2word))
-        results.append(sentences)
-    return results
+        input_pairs = (texts1[:, :-1].clone().to(device),
+                       texts2[:, :-1].clone().to(device))
+        topic_pairs = (topics1.to(device), topics1.to(device))
+        length_pairs = (lengths1, lengths2)
+        samples_z.append(model.interpolate(input_pairs, topic_pairs, length_pairs,
+                                           args.max_length, SOS_ID))
+        topic_pairs = (topics1.to(device), topics2.to(device))
+        samples_both.append(model.interpolate(input_pairs, topic_pairs, length_pairs,
+                                              args.max_length, SOS_ID))
+        input_pairs = (texts1[:, :-1].clone().to(device),
+                       texts1[:, :-1].clone().to(device))
+        length_pairs = (lengths1, lengths1)
+        samples_t.append(model.interpolate(input_pairs, topic_pairs, length_pairs,
+                                           args.max_length, SOS_ID))
+        
+    all_results = []
+    for samples in [samples_z, samples_t, samples_both]:
+        results = []
+        for x in zip(*samples):
+            sentences = []
+            # each x is a list of batch_size x max_length, i.e. batch of generated sentences
+            for sample in torch.cat(x).cpu().numpy():
+                sentences.append(indices_to_sentence(sample, idx2word))
+            results.append(sentences)
+        all_results.append(results)
+    return all_results
 
 
 def change_label(data_source, model, new_label, idx2word, device):
@@ -167,10 +168,11 @@ def main(args):
     elif args.task == 'interpolate':
         if with_label:
             raise ValueError("interpolate option not supported for labeled data")
-        results = interpolate(input_data, model, corpus.idx2word, args.interpolate_type, device)
-        for i, x in enumerate(results):
-            with open('{0}.{1:d}.{2}.int'.format(output_path, i, args.interpolate_type), 'w') as f:
-                f.write('\n'.join(x))
+        all_results = interpolate(input_data, model, corpus.idx2word, device)
+        for tp, results in zip(['z', 't', 'both'], all_results):
+            for i, x in enumerate(results):
+                with open('{0}.{1:d}.{2}.int'.format(output_path, i, tp), 'w') as f:
+                    f.write('\n'.join(x))
     elif args.task == 'change_label':
         if not with_label:
             raise ValueError("change_label not supported for unlabeled data")
