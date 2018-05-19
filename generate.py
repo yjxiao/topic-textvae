@@ -12,7 +12,7 @@ parser.add_argument('--ckpt', type=str, default='./saves/model.pt',
 parser.add_argument('--num_topics', type=int, default=32,
                     help="number of topics for the model")
 parser.add_argument('--task', type=str, default='reconstruct',
-                    help='task to perform: [reconstruct, interpolate, sample, change_label]')
+                    help='task to perform: [reconstruct, interpolate, sample, change_label, topics]')
 parser.add_argument('--max_vocab', type=int, default=20000,
                     help="maximum vocabulary size for the input")
 parser.add_argument('--input_file', type=str, default='valid.txt',
@@ -131,6 +131,22 @@ def change_label(data_source, model, new_label, idx2word, device):
     return results
 
 
+def get_topics(data_source, model, device):
+    results = []
+    for i in range(0, data_source.size, args.batch_size):
+        batch_size = min(data_source.size-i, args.batch_size)
+        texts, labels, _, lengths, idx = data_source.get_batch(batch_size, i)
+        inputs = texts[:, :-1].clone().to(device)
+        if data_source.has_label:
+            labels = labels.to(device)
+            topics = model.get_topics(inputs, labels, lengths)
+        else:
+            topics = model.get_topics(inputs, lengths)
+        for tpcs in topics.cpu().detach().numpy()[idx]:
+            results.append(' '.join(list(map(str, tpcs))))
+    return results
+    
+    
 def main(args):
     with open(args.ckpt, 'rb') as f:
         model = torch.load(f)
@@ -180,7 +196,11 @@ def main(args):
             results = change_label(input_data, model, k, corpus.idx2word, device)
             with open('{0}.{1:d}.cl'.format(output_path, k), 'w') as f:
                 f.write('\n'.join(results))
-        
+    elif args.task == 'topics':
+        results = get_topics(input_data, model, device)
+        with open('{0}.tp'.format(output_path), 'w') as f:
+            f.write('\n'.join(results))
+
 
 if __name__ == '__main__':
     main(args)

@@ -117,14 +117,22 @@ class TextVAE(nn.Module):
         bow = self.bow_predictor(z).squeeze(0)
         return outputs, mu, logvar, alphas, bow
 
-    def reconstruct(self, inputs, topics, lengths, max_length, sos_id):
+    def reconstruct(self, inputs, topics, lengths, max_length, sos_id, fix_z=False, fix_t=True):
         enc_emb = self.lookup(inputs)
         topics.unsqueeze_(0)
         hn, _ = self.encoder(enc_emb, lengths)
         if self.is_joint:
+            fix_t = True
             hn = torch.cat([hn, topics], dim=2)  
         mu, logvar = self.fcmu(hn), self.fclogvar(hn)
-        z = self.reparameterize(mu, logvar)
+        if fix_z:
+            z = mu
+        else:
+            z = self.reparameterize(mu, logvar)
+        if not fix_t:
+            alphas = self.topic_prior(z)
+            dist = Dirichlet(alphas.cpu())
+            topics = dist.sample().to(device)
         return self.generate(z, topics, max_length, sos_id)
 
     def sample(self, num_samples, max_length, sos_id, device):
@@ -139,6 +147,15 @@ class TextVAE(nn.Module):
         topics = dist.sample().to(device)
         return self.generate(z, topics, max_length, sos_id)
 
+    def get_topics(self, inputs, lengths):
+        if self.is_joint:
+            raise NotImplementedError("Topics distributions for joint model is not generatable.")
+        enc_emb = self.lookup(inputs)
+        hn, _ = self.encoder(enc_emb, lengths)
+        z = self.fcmu(hn)
+        alphas = self.topic_prior(z).squeeze(0)
+        return alphas / alphas.sum(1, keepdim=True)
+        
     def interpolate(self, input_pairs, topic_pairs, length_pairs, max_length, sos_id, num_pts=4):
         z_pairs = []
         for inputs, topics, lengths in zip(input_pairs, topic_pairs, length_pairs):
@@ -238,6 +255,17 @@ class TextCVAE(nn.Module):
         outputs = self.fcout(outputs)
         bow = self.bow_predictor(torch.cat([z, lab_emb], dim=2))
         return outputs, (mu_pr, mu_po), (logvar_pr, logvar_po), alphas, bow
+
+    def get_topics(self, inputs, labels, lengths):
+        if self.is_joint:
+            raise NotImplementedError("Topics distributions for joint model is not generatable.")
+        enc_emb = self.lookup(inputs)
+        lab_emb = self.label_lookup(labels).unsqueeze(0)
+        h, _ = self.encoder(enc_emb, lengths)
+        hn = torch.cat([h, lab_emb], dim=2)
+        z = self.fcmu(hn)
+        alphas = self.topic_prior(torch.cat([z, lab_emb], dim=2)).squeeze(0)
+        return alphas / alphas.sum(1, keepdim=True)
 
     def reconstruct(self, inputs, labels, topics, lengths, max_length, sos_id):
         enc_emb = self.lookup(inputs)
