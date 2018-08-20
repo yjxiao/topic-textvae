@@ -46,7 +46,7 @@ def indices_to_sentence(indices, idx2word):
     return ' '.join(words)
     
     
-def reconstruct(data_source, model, idx2word, device):
+def reconstruct(data_source, model, idx2word, device, fix_z, fix_t):
     results = []
     for i in range(0, data_source.size, args.batch_size):
         batch_size = min(data_source.size-i, args.batch_size)
@@ -57,7 +57,7 @@ def reconstruct(data_source, model, idx2word, device):
             labels = labels.to(device)
             samples = model.reconstruct(inputs, labels, topics, lengths, args.max_length, SOS_ID)
         else:
-            samples = model.reconstruct(inputs, topics, lengths, args.max_length, SOS_ID)
+            samples = model.reconstruct(inputs, topics, lengths, args.max_length, SOS_ID, fix_z=fix_z, fix_t=fix_t)
         for sample in samples.cpu().numpy()[idx]:
             results.append(indices_to_sentence(sample, idx2word))
     return results
@@ -69,7 +69,7 @@ def sample(data_source, model, label, idx2word, device):
         batch_size = min(args.num_samples - i, args.batch_size)
         if data_source.has_label:
             labels = torch.full((batch_size,), label, dtype=torch.long, device=device)
-            samples = model.sample(labels, args.max_length, SOS_ID)
+            samples = model.sample(labels, args.max_length, SOS_ID, scale=2)
         else:
             samples = model.sample(batch_size, args.max_length, SOS_ID, device)
         for i, sample in enumerate(samples.cpu().numpy()):
@@ -167,10 +167,16 @@ def main(args):
     input_data = data.Data(input_path, (corpus.word2idx, corpus.label2idx),
                            args.num_topics, args.max_length, with_label=with_label)
     if args.task == 'reconstruct':
+        results = reconstruct(input_data, model, corpus.idx2word, device, True, True)
+        with open('{0}.rec'.format(output_path), 'w') as f:
+            f.write('\n'.join(results))
         for i in range(args.num_samples):
-            results = reconstruct(input_data, model, corpus.idx2word, device)
-            with open('{0}.{1:d}.rec'.format(output_path, i), 'w') as f:
-                f.write('\n'.join(results))
+            for fix_z in [True, False]:
+                results = reconstruct(input_data, model, corpus.idx2word, device, fix_z, not fix_z)
+                with open('{0}.{1:d}.{2}.rec'.format(
+                        output_path, i, 'fixz' if fix_z else 'fixt'
+                ), 'w') as f:
+                    f.write('\n'.join(results))
     elif args.task == 'sample':
         if with_label:
             for label in range(corpus.num_classes):

@@ -132,7 +132,7 @@ class TextVAE(nn.Module):
         if not fix_t:
             alphas = self.topic_prior(z)
             dist = Dirichlet(alphas.cpu())
-            topics = dist.sample().to(device)
+            topics = dist.sample().to(z.device)
         return self.generate(z, topics, max_length, sos_id)
 
     def sample(self, num_samples, max_length, sos_id, device):
@@ -280,10 +280,12 @@ class TextCVAE(nn.Module):
         z = self.reparameterize(mu, logvar)
         return self.generate(z, topics, lab_emb, max_length, sos_id)
 
-    def sample(self, labels, max_length, sos_id):
+    def sample(self, labels, max_length, sos_id, scale=1):
         lab_emb = self.label_lookup(labels).unsqueeze(0)
         mu, logvar = self.z_prior(lab_emb)
         z = self.reparameterize(mu, logvar)
+        if scale != 1:
+            z = mu + (z - mu) * scale
         alphas = self.topic_prior(torch.cat([z, lab_emb], dim=2))
         dist = Dirichlet(alphas.cpu())
         topics = dist.sample().to(alphas.device)
